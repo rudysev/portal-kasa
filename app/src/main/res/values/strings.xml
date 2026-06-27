@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Kasa Plugs</string>
+
+    <string name="portal_tools_summary" translatable="false">Control your smart plugs by voice.</string>
+
+    <!-- The tools this app contributes to the assistant (ToolContract). A JSON array of Gemini function
+         declarations; names are reverse-domain. Each JSON quote is escaped (\") for the string resource. -->
+    <string name="portal_tools" translatable="false">[{\"name\":\"com.portal.kasa.set_plug\",\"description\":\"Turn a smart plug on or off by name.\",\"parameters\":{\"type\":\"OBJECT\",\"properties\":{\"plug_name\":{\"type\":\"STRING\",\"description\":\"The name of the plug as shown in the Kasa app, for example piano lights or coffee maker.\"},\"on\":{\"type\":\"BOOLEAN\",\"description\":\"true to turn the plug on, false to turn it off.\"}},\"required\":[\"plug_name\",\"on\"]}},{\"name\":\"com.portal.kasa.list_plugs\",\"description\":\"List all smart plugs and whether each one is currently on.\",\"parameters\":{\"type\":\"OBJECT\",\"properties\":{},\"required\":[]}}]</string>
+</resources>
