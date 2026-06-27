@@ -1,0 +1,27 @@
+*.iml
+.gradle
+.DS_Store
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.externalNativeBuild
+.cxx
+local.properties
+
+# Build output (root and per-module, e.g. app/build).
+build/
+/captures
+
+# Built / staged APK artifacts — never commit (debug builds live under build/).
+*.apk
+
+# Kotlin compiler daemon / build session scratch dir.
+.kotlin/
+
+# Local-only tooling, never publish: Cursor rules and the Claude Code working dir
+# (scratch screenshots + machine-local settings).
+.cursorrules
+.claude/

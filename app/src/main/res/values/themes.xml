@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Plain platform no-action-bar theme (no AppCompat dep); Compose owns the actual theming.
+         Dark window background avoids a white flash before the first composition. -->
+    <style name="Theme.Kasa" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>
