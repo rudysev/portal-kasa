@@ -23,7 +23,8 @@ class KasaToolHandlerTest {
     ) : KasaClient {
         val sends = mutableListOf<Pair<String, Boolean>>()
         override fun discover(): List<Device> = devices
-        override fun setRelay(ip: String, on: Boolean): Boolean {
+        override fun refreshKnown(ips: List<String>): List<Device> = devices.filter { it.ip in ips }
+        override fun setRelay(ip: String, on: Boolean, isBulb: Boolean): Boolean {
             sends.add(ip to on)
             return relayOk(ip, on)
         }

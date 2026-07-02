@@ -10,4 +10,6 @@ data class Plug(
     val ip: String,
     val alias: String,
     val on: Boolean,
+    /** Smart bulb vs plug/switch — carried from discovery so a toggle sends the right command (bulbs have no relay). */
+    val isBulb: Boolean = false,
 )

@@ -12,13 +12,18 @@ interface KasaClient {
     /** Broadcast-discover plugs on the current Wi-Fi. Blocking — callers hop to an IO dispatcher. */
     fun discover(): List<KasaLocal.Device>
 
-    /** Flip a single plug's relay over TCP; true on an `err_code: 0` ack. Blocking. */
-    fun setRelay(ip: String, on: Boolean): Boolean
+    /** Directed unicast `get_sysinfo` refresh of already-known plugs (no broadcast). Blocking. */
+    fun refreshKnown(ips: List<String>): List<KasaLocal.Device>
+
+    /** Flip a single device on/off over TCP; true on an `err_code: 0` ack. [isBulb] routes plug vs bulb. Blocking. */
+    fun setRelay(ip: String, on: Boolean, isBulb: Boolean): Boolean
 }
 
 /** Production [KasaClient] backed by [KasaLocal], with the application Context bound at construction. */
 class KasaLocalClient(private val appContext: Context) : KasaClient {
     override fun discover(): List<KasaLocal.Device> = KasaLocal.discover(appContext)
 
-    override fun setRelay(ip: String, on: Boolean): Boolean = KasaLocal.setRelay(ip, on)
+    override fun refreshKnown(ips: List<String>): List<KasaLocal.Device> = KasaLocal.refreshKnown(ips)
+
+    override fun setRelay(ip: String, on: Boolean, isBulb: Boolean): Boolean = KasaLocal.setRelay(ip, on, isBulb)
 }

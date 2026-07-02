@@ -36,16 +36,17 @@ object KasaParse {
         return String(out, Charsets.UTF_8)
     }
 
-    /** A plug's name + relay state from a decrypted `get_sysinfo` reply. */
+    /** A plug's name, on/off state, and whether it's a bulb, from a decrypted `get_sysinfo` reply. */
     data class SysInfo(
         val alias: String,
         val on: Boolean,
+        val isBulb: Boolean,
     )
 
     fun parseSysinfo(json: String): SysInfo? = runCatching {
         val sys = JSONObject(json).optJSONObject("system")?.optJSONObject("get_sysinfo") ?: return@runCatching null
         val alias = sys.optString("alias")
-        if (alias.isBlank()) null else SysInfo(alias, isOn(sys))
+        if (alias.isBlank()) null else SysInfo(alias, isOn(sys), isBulb(sys))
     }.getOrNull()
 
     /**
@@ -58,12 +59,34 @@ object KasaParse {
         else -> sys.optJSONObject("light_state")?.optInt("on_off", 0) == 1
     }
 
-    /** True iff a decrypted `set_relay_state` reply acked with `err_code == 0`. */
+    /**
+     * Whether the device is a smart **bulb** rather than a plug/switch — a structural heuristic mirroring
+     * [isOn]'s relay_state/light_state split (Kasa's `type` field isn't consulted). Decides the *write* command:
+     * a bulb ignores `set_relay_state` and must be driven via the lighting service (see [cmdSetLight] vs [cmdSetRelay]).
+     */
+    private fun isBulb(sys: JSONObject): Boolean = !sys.has("relay_state") && sys.has("light_state")
+
+    /** True iff a decrypted set reply acked `err_code == 0` — for a plug's `set_relay_state` **or** a bulb's
+     *  `transition_light_state` (the two device families ack in different namespaces). */
     fun parseSetAck(json: String): Boolean = runCatching {
-        JSONObject(json).optJSONObject("system")?.optJSONObject("set_relay_state")?.optInt("err_code", -1) == 0
+        val root = JSONObject(json)
+        val relay = root.optJSONObject("system")?.optJSONObject("set_relay_state")
+        if (relay != null) return@runCatching relay.optInt("err_code", -1) == 0
+        val light = root.optJSONObject(LIGHTING_SERVICE)?.optJSONObject("transition_light_state")
+        light?.optInt("err_code", -1) == 0
     }.getOrDefault(false)
 
     const val CMD_GET_SYSINFO = """{"system":{"get_sysinfo":{}}}"""
 
     fun cmdSetRelay(on: Boolean): String = """{"system":{"set_relay_state":{"state":${if (on) 1 else 0}}}}"""
+
+    /** The bulb lighting-service namespace — the command and ack live here (bulbs have no `system.set_relay_state`). */
+    const val LIGHTING_SERVICE = "smartlife.iot.smartbulb.lightingservice"
+
+    /**
+     * Bulb on/off command. Smart bulbs have no relay, so [cmdSetRelay] is a no-op on them — their on/off goes
+     * through the lighting service's `transition_light_state`. Route by [SysInfo.isBulb].
+     */
+    fun cmdSetLight(on: Boolean): String =
+        """{"$LIGHTING_SERVICE":{"transition_light_state":{"on_off":${if (on) 1 else 0}}}}"""
 }

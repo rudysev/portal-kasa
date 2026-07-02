@@ -69,4 +69,37 @@ class PlugMergeTest {
         val merged = merge(emptyList(), listOf(dev("1", "Alpha", on = false)))
         assertEquals(listOf("Alpha"), merged.map { it.alias })
     }
+
+    @Test fun unicastMergeKeepsSilentPlugAndNeverMissCounts() {
+        val misses = mutableMapOf<String, Int>()
+        val a = dev("1", "Alpha", on = true)
+        val b = dev("2", "Bravo", on = false)
+        var list = listOf(a, b)
+
+        // Bravo is silent on unicast across many cycles — it must stay, and never accrue a miss (broadcast
+        // governs removal, not unicast).
+        repeat(5) { list = PlugMerge.mergeUnicast(list, listOf(a), misses, emptySet()) }
+
+        assertEquals(setOf("Alpha", "Bravo"), list.map { it.alias }.toSet())
+        assertTrue(misses.isEmpty()) // no miss counting on the unicast path
+    }
+
+    @Test fun unicastMergeUpdatesAnsweredStateClearsMissAndKeepsOptimistic() {
+        val misses = mutableMapOf("1" to 2) // a prior broadcast miss pending on Alpha
+        val prev = listOf(dev("1", "Alpha", on = false), dev("2", "Bravo", on = true))
+        // Alpha answers on=true (clears its miss); Bravo answers on=false but is mid-toggle so keeps optimistic.
+        val found = listOf(dev("1", "Alpha", on = true), dev("2", "Bravo", on = false))
+
+        val merged = PlugMerge.mergeUnicast(prev, found, misses, pending = setOf("2"))
+
+        assertTrue(merged.first { it.ip == "1" }.on) // took fresh state
+        assertNull(misses["1"]) // answered → pending miss cleared
+        assertTrue(merged.first { it.ip == "2" }.on) // pending → optimistic ON preserved over stale OFF
+    }
+
+    @Test fun unicastMergeNeverAddsNewPlugs() {
+        // Unicast only queries known plugs; a stray reply for an unknown ip must not appear.
+        val merged = PlugMerge.mergeUnicast(listOf(dev("1", "Alpha", on = false)), listOf(dev("9", "Ghost", on = true)), mutableMapOf(), emptySet())
+        assertEquals(listOf("Alpha"), merged.map { it.alias })
+    }
 }

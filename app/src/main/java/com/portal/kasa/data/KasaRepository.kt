@@ -61,6 +61,12 @@ class KasaRepository(
 
     private val desired = ConcurrentHashMap<String, Boolean>() // ip → latest requested state (not yet sent)
     private val inflight = ConcurrentHashMap.newKeySet<String>() // ips with a send currently on the wire
+    /**
+     * ip → isBulb. A device's kind is stable, so — unlike [_plugs] — this is never evicted; [drain] routes the
+     * command from it even if the card was dropped mid-toggle (re-deriving from [_plugs] could misroute a
+     * dropped bulb to `set_relay_state`).
+     */
+    private val kindByIp = ConcurrentHashMap<String, Boolean>()
     private val ipMutexes = ConcurrentHashMap<String, Mutex>() // serialises sends per plug (suspending)
     private val cacheLock = Any() // guards every _plugs mutation; held only for the in-memory write
     private val refreshMutex = Mutex() // serialises whole refresh cycles (held across discovery I/O)
@@ -69,24 +75,56 @@ class KasaRepository(
     fun snapshot(): List<Plug> = _plugs.value
 
     /**
-     * Re-discover plugs on the LAN and **merge** with the current list (see [PlugMerge]): a plug that misses a
-     * (lossy UDP) cycle keeps its card until [MAX_MISSES] misses in a row, and a plug mid-toggle keeps its
-     * optimistic state. A totally empty result is treated as a local blip and left intact. Discovery I/O runs
-     * on the unbounded [io]; the whole cycle is serialised so two callers (UI refresh + voice) can't interleave.
+     * Broadcast-discover the LAN and merge into the cache (see [broadcastDiscover]). Serialised with [syncKnown]
+     * via [refreshMutex] so a UI refresh and a voice call can't interleave. Returns whether any plug is known.
      */
-    suspend fun refresh(): Boolean = refreshMutex.withLock {
+    suspend fun refresh(): Boolean = refreshMutex.withLock { broadcastDiscover() }
+
+    /**
+     * Cheap periodic re-sync: directed-unicast [KasaClient.refreshKnown] the known plugs, skipping the broadcast
+     * blast (and `MulticastLock`) that [refresh] does. Broadcast is only needed to *find* new/returned plugs, so
+     * the frequent tick uses this; a cold cache falls back to a broadcast discover. Unicast only updates state and
+     * never drops a silent plug — membership is [refresh]'s job (see [PlugMerge.mergeUnicast]).
+     */
+    suspend fun syncKnown(): Boolean = refreshMutex.withLock {
+        val known = _plugs.value.map { it.ip }
+        if (known.isEmpty()) {
+            broadcastDiscover()
+        } else {
+            val found = withContext(io) { client.refreshKnown(known) }.map { Plug(it.ip, it.alias, it.on, it.isBulb) }
+            store(found) { prev -> PlugMerge.mergeUnicast(prev, found, misses, pendingIps()) }
+        }
+    }
+
+    /**
+     * Broadcast-discover and merge for membership (miss-counts and can drop plugs it no longer sees). Shared by
+     * [refresh] and [syncKnown]'s cold-cache fallback; assumes the caller holds [refreshMutex] (it's non-reentrant,
+     * so this can't just call [refresh]).
+     */
+    private suspend fun broadcastDiscover(): Boolean {
         // Map the wire type to the domain [Plug] at this boundary — net types don't travel past the repository.
-        val found = withContext(io) { client.discover() }.map { Plug(it.ip, it.alias, it.on) }
+        val found = withContext(io) { client.discover() }.map { Plug(it.ip, it.alias, it.on, it.isBulb) }
+        return store(found) { prev -> PlugMerge.merge(prev, found, misses, pendingIps(), MAX_MISSES) }
+    }
+
+    /**
+     * Store a discovery/refresh result into the cache under [cacheLock]: a totally empty result is treated as a
+     * local blip and left intact; otherwise [merge] produces the new list (the caller picks the broadcast
+     * membership merge or the unicast state-only merge). Also records each device's (stable) kind in [kindByIp].
+     * Shared by [broadcastDiscover] and [syncKnown].
+     */
+    private inline fun store(found: List<Plug>, merge: (List<Plug>) -> List<Plug>): Boolean {
+        found.forEach { kindByIp[it.ip] = it.isBulb } // remember kinds even for plugs a later merge may drop
         synchronized(cacheLock) {
             if (found.isEmpty()) {
                 if (_plugs.value.isEmpty()) _plugs.value = lastGood
             } else {
-                val merged = PlugMerge.merge(_plugs.value, found, misses, pendingIps(), MAX_MISSES)
+                val merged = merge(_plugs.value)
                 _plugs.value = merged
                 lastGood = merged
             }
         }
-        _plugs.value.isNotEmpty()
+        return _plugs.value.isNotEmpty()
     }
 
     /** Ensure plugs are loaded (discover once if the cache is empty) — the voice provider's fast path. */
@@ -135,7 +173,8 @@ class KasaRepository(
             var lastOk = true
             while (true) {
                 val want = desired.remove(ip) ?: break
-                lastOk = withContext(relayDispatcher) { client.setRelay(ip, want) }
+                val isBulb = kindByIp[ip] ?: false // stable kind, not re-derived from the evictable cache
+                lastOk = withContext(relayDispatcher) { client.setRelay(ip, want, isBulb) }
                 if (!lastOk && !desired.containsKey(ip)) setCachedState(ip, !want)
                 DebugLog.log("kasa relay $ip=$want → $lastOk")
             }

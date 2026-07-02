@@ -1,5 +1,8 @@
 package com.portal.kasa.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -58,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -65,6 +69,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.portal.kasa.data.Plug
 import kotlinx.coroutines.delay
@@ -85,6 +90,18 @@ import java.util.Locale
 fun PlugsScreen(viewModel: PlugsViewModel) {
     val plugs by viewModel.plugs.collectAsStateWithLifecycle()
     val refreshing by viewModel.refreshing.collectAsStateWithLifecycle()
+
+    // Report visibility so the re-sync backs off when the dashboard leaves the screen (see PlugsViewModel).
+    // A configuration change (rotation) tears the composition down and back up; that is NOT the app leaving the
+    // screen, so we must not report it as "hidden" — that would make the return look like a resume and trigger a
+    // spurious rediscover.
+    val activity = LocalContext.current.findActivity()
+    LifecycleStartEffect(Unit) {
+        viewModel.onVisibilityChanged(true)
+        onStopOrDispose {
+            if (activity?.isChangingConfigurations != true) viewModel.onVisibilityChanged(false)
+        }
+    }
 
     BoxWithConstraints(
         Modifier
@@ -135,6 +152,13 @@ fun PlugsScreen(viewModel: PlugsViewModel) {
             }
         }
     }
+}
+
+/** Unwrap the [Activity] from a (possibly wrapped) Compose [Context] — used to read `isChangingConfigurations`. */
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable

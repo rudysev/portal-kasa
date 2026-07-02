@@ -25,11 +25,14 @@ object KasaLocal {
     private const val RESEND_MS = 250 // re-broadcast cadence — UDP broadcast is lossy, so ask repeatedly
     private const val SWEEP_TICKS = 2 // ticks on which to also unicast-sweep (direct sends are reliable)
     private const val SOCKET_MS = 1200 // per-plug TCP connect/read timeout
+    private const val REFRESH_MS = 800 // unicast-refresh window — directed UDP is reliable, so short + early-exit
+    private const val REFRESH_SENDS = 2 // resend a directed query at most twice before giving up on a silent plug
 
     data class Device(
         val ip: String,
         val alias: String,
         val on: Boolean,
+        val isBulb: Boolean = false,
     )
 
     /**
@@ -90,7 +93,7 @@ object KasaLocal {
                         DebugLog.log("kasa discover: unparsed reply from $ip len=${pkt.length}")
                         continue
                     }
-                    found[ip] = Device(ip, sys.alias, sys.on)
+                    found[ip] = Device(ip, sys.alias, sys.on, sys.isBulb)
                 }
             }
         }.onFailure { DebugLog.log("kasa discover failed: ${it.message}") }
@@ -99,15 +102,79 @@ object KasaLocal {
         return found.values.toList()
     }
 
-    /** Set a single plug's relay on/off over TCP. Returns true on an `err_code: 0` ack. */
+    /**
+     * Unicast-refresh a set of **already-known** plugs by directed `get_sysinfo` — the cheap counterpart to the
+     * broadcast [discover]. Broadcast is only needed to *find* plugs; once we know their ips, a directed UDP
+     * query is AP-buffered and reliable, so this skips the broadcast blast (and the `MulticastLock`) entirely
+     * and returns as soon as every known plug has answered (typically well under [REFRESH_MS]). A plug that
+     * doesn't answer simply isn't in the result — it keeps its card (unicast doesn't drop; broadcast [discover]
+     * governs membership). Empty [ips] → empty.
+     */
+    fun refreshKnown(ips: List<String>): List<Device> {
+        if (ips.isEmpty()) return emptyList()
+        val payload = KasaParse.encrypt(KasaParse.CMD_GET_SYSINFO)
+        // distinctBy hostAddress: `found` is keyed uniquely by ip, so a duplicate target would keep
+        // `found.size < targets.size` forever and defeat the "everyone answered" early-exit below.
+        val targets = ips.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
+            .distinctBy { it.hostAddress }
+        val found = LinkedHashMap<String, Device>() // keyed by ip → dedupe repeat replies
+        runCatching {
+            DatagramSocket().use { sock ->
+                sock.soTimeout = 200 // short ticks so we can poll the deadline and re-send
+                val buf = ByteArray(8 * 1024) // headroom for a bulb's larger get_sysinfo (see discover)
+                val deadline = System.currentTimeMillis() + REFRESH_MS
+                var nextSend = 0L
+                var sends = 0
+                // Stop early once every known plug has answered — directed UDP usually replies on the first tick.
+                while (System.currentTimeMillis() < deadline && found.size < targets.size) {
+                    val nowMs = System.currentTimeMillis()
+                    if (nowMs >= nextSend && sends < REFRESH_SENDS) {
+                        for (addr in targets) {
+                            if (addr.hostAddress in found) continue // already answered — don't re-query
+                            runCatching { sock.send(DatagramPacket(payload, payload.size, addr, PORT)) }
+                        }
+                        sends++
+                        nextSend = nowMs + RESEND_MS
+                    }
+                    val pkt = DatagramPacket(buf, buf.size)
+                    if (!runCatching {
+                            sock.receive(pkt)
+                            true
+                        }.getOrDefault(false)
+                    ) {
+                        continue
+                    }
+                    val ip = pkt.address?.hostAddress ?: continue
+                    val decrypted = KasaParse.decrypt(pkt.data, pkt.length)
+                    val sys = KasaParse.parseSysinfo(decrypted)
+                    if (sys == null) {
+                        // Mirror discover's diagnostic: an unreadable reply here would otherwise silently drop the
+                        // plug from the unicast sweep with no trail (see discover's unparsed-reply log).
+                        DebugLog.log("kasa refresh(known): unparsed reply from $ip len=${pkt.length}")
+                        continue
+                    }
+                    found[ip] = Device(ip, sys.alias, sys.on, sys.isBulb)
+                }
+            }
+        }.onFailure { DebugLog.log("kasa refresh(known) failed: ${it.message}") }
+        DebugLog.log("kasa refresh(known ${ips.size}) → ${found.size}")
+        return found.values.toList()
+    }
+
+    /**
+     * Set a single device on/off over TCP. Returns true on an `err_code: 0` ack. Routes by [isBulb]: a plug/switch
+     * takes `set_relay_state`, a **bulb** takes the lighting service's `transition_light_state` (it has no relay,
+     * so `set_relay_state` is a silent no-op on it). The caller knows the kind from discovery ([Device.isBulb]).
+     */
     fun setRelay(
         ip: String,
         on: Boolean,
+        isBulb: Boolean,
     ): Boolean = runCatching {
         Socket().use { s ->
             s.connect(InetSocketAddress(ip, PORT), SOCKET_MS)
             s.soTimeout = SOCKET_MS
-            val body = KasaParse.encrypt(KasaParse.cmdSetRelay(on))
+            val body = KasaParse.encrypt(if (isBulb) KasaParse.cmdSetLight(on) else KasaParse.cmdSetRelay(on))
             DataOutputStream(s.getOutputStream()).run {
                 writeInt(body.size) // 4-byte big-endian length header (TCP framing)
                 write(body)

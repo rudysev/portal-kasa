@@ -44,8 +44,14 @@ class PlugsViewModelTest {
 
     private class FakeClient(var devices: List<Device>) : KasaClient {
         val sends = mutableListOf<Pair<String, Boolean>>()
-        override fun discover(): List<Device> = devices
-        override fun setRelay(ip: String, on: Boolean): Boolean {
+        var discoverCount = 0
+        override fun discover(): List<Device> {
+            discoverCount++
+            return devices
+        }
+
+        override fun refreshKnown(ips: List<String>): List<Device> = devices.filter { it.ip in ips }
+        override fun setRelay(ip: String, on: Boolean, isBulb: Boolean): Boolean {
             sends.add(ip to on)
             return true
         }
@@ -66,6 +72,45 @@ class PlugsViewModelTest {
 
         assertFalse(vm.refreshing.value)           // spinner cleared once discovery completes
         assertEquals(listOf("Fan", "Lamp"), vm.plugs.value.map { it.alias }) // alias-sorted
+    }
+
+    @Test fun firstForegroundSkipsDuplicateLoadButLaterResumeRefreshes() {
+        val client = FakeClient(listOf(Device("1", "Lamp", on = false)))
+        val vm = viewModel(client)
+        scheduler.runCurrent() // init's initial load
+        assertEquals(1, client.discoverCount)
+
+        vm.onVisibilityChanged(true) // first foreground — init already loaded, so must NOT re-sweep
+        scheduler.runCurrent()
+        assertEquals(1, client.discoverCount)
+
+        vm.onVisibilityChanged(false) // genuine background
+        vm.onVisibilityChanged(true) // genuine return → one quiet broadcast refresh
+        scheduler.runCurrent()
+        assertEquals(2, client.discoverCount)
+    }
+
+    @Test fun broadcastRediscoverScheduleSurvivesVisibilityFlips() {
+        // REDISCOVER_EVERY = 10: the 10th re-sync tick is a broadcast. A visibility flip restarts the cadence
+        // loop, so if the tick counter were loop-local it would reset and the broadcast would never come due.
+        val client = FakeClient(listOf(Device("1", "Lamp", on = false)))
+        val vm = viewModel(client)
+        scheduler.runCurrent() // init broadcast load
+        vm.onVisibilityChanged(true) // first foreground: init already loaded, no extra sweep
+        scheduler.runCurrent()
+        assertEquals(1, client.discoverCount)
+
+        repeat(5) { scheduler.advanceTimeBy(30_000); scheduler.runCurrent() } // ticks 1-5: unicast
+        // Flip visibility (background→foreground). A loop-local counter would reset to 0 here.
+        vm.onVisibilityChanged(false)
+        vm.onVisibilityChanged(true) // genuine resume → one quiet broadcast refresh (discoverCount 1→2)
+        scheduler.runCurrent()
+        assertEquals(2, client.discoverCount)
+        repeat(5) { scheduler.advanceTimeBy(30_000); scheduler.runCurrent() } // ticks 6-10: 10th is a broadcast
+
+        // init + resume + the 10th-tick rediscover. If the flip had reset the counter, only 5 ticks would have
+        // elapsed since and this would still be 2.
+        assertEquals(3, client.discoverCount)
     }
 
     @Test fun toggleDelegatesToRepositoryAndFlipsCache() {

@@ -23,8 +23,7 @@ object PlugMerge {
         return (prevByIp.keys + foundByIp.keys).mapNotNull { ip ->
             val fresh = foundByIp[ip]
             if (fresh != null) {
-                misses.remove(ip)
-                if (ip in pending) fresh.copy(on = prevByIp[ip]?.on ?: fresh.on) else fresh
+                answered(fresh, prevByIp[ip], ip in pending, misses)
             } else {
                 val n = (misses[ip] ?: 0) + 1
                 misses[ip] = n
@@ -36,5 +35,38 @@ object PlugMerge {
                 }
             }
         }.sortedBy { it.alias.lowercase() }
+    }
+
+    /**
+     * State-only merge for a **unicast** refresh ([KasaClient.refreshKnown][com.portal.kasa.net.KasaClient]),
+     * which only queries plugs we already know. Unlike [merge], a plug that doesn't answer is **not**
+     * miss-counted or dropped — it just keeps its card, because *broadcast* discovery (which sweeps the whole
+     * LAN) is the authority on membership. This prevents the tighter unicast window from evicting a plug that's
+     * merely slow this cycle (it would otherwise flicker out for minutes until the next broadcast re-found it).
+     * A plug that *does* answer takes the fresh state (unless mid-toggle) and has any pending miss cleared, so a
+     * later broadcast won't drop a plug that unicast can plainly see is alive. Never adds plugs (a new ip only
+     * appears via broadcast). Sorted by alias for stable order.
+     */
+    fun mergeUnicast(
+        prev: List<Plug>,
+        found: List<Plug>,
+        misses: MutableMap<String, Int>,
+        pending: Set<String>,
+    ): List<Plug> {
+        val foundByIp = found.associateBy { it.ip }
+        return prev.map { p ->
+            val fresh = foundByIp[p.ip] ?: return@map p // silent on unicast → keep card, don't miss-count
+            answered(fresh, p, p.ip in pending, misses)
+        }.sortedBy { it.alias.lowercase() }
+    }
+
+    /**
+     * Reconcile a plug that *answered* a sweep, shared by both merges: clear any pending miss (it's alive), and
+     * take the fresh state — unless it's mid-toggle ([isPending]), in which case keep [prev]'s optimistic on/off
+     * so an in-flight command isn't snapped back by a stale snapshot.
+     */
+    private fun answered(fresh: Plug, prev: Plug?, isPending: Boolean, misses: MutableMap<String, Int>): Plug {
+        misses.remove(fresh.ip)
+        return if (isPending) fresh.copy(on = prev?.on ?: fresh.on) else fresh
     }
 }

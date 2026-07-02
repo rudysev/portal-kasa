@@ -51,14 +51,38 @@ class KasaParseTest {
         assertNull(KasaParse.parseSysinfo("not json"))
     }
 
+    @Test fun parseSysinfoFlagsBulbVsPlug() {
+        // A bulb has no relay_state (its state lives in light_state); a plug/switch reports relay_state.
+        val bulb = KasaParse.parseSysinfo("""{"system":{"get_sysinfo":{"alias":"Globe","light_state":{"on_off":1}}}}""")!!
+        assertTrue(bulb.isBulb)
+        val plug = KasaParse.parseSysinfo("""{"system":{"get_sysinfo":{"alias":"Lamp","relay_state":1}}}""")!!
+        assertFalse(plug.isBulb)
+    }
+
     @Test fun parseSetAck() {
         assertTrue(KasaParse.parseSetAck("""{"system":{"set_relay_state":{"err_code":0}}}"""))
         assertFalse(KasaParse.parseSetAck("""{"system":{"set_relay_state":{"err_code":-1}}}"""))
         assertFalse(KasaParse.parseSetAck("garbage"))
     }
 
+    @Test fun parseSetAckHandlesBulbLightingAck() {
+        // Bulbs ack in the lighting-service namespace, not system.set_relay_state.
+        assertTrue(
+            KasaParse.parseSetAck("""{"${KasaParse.LIGHTING_SERVICE}":{"transition_light_state":{"on_off":1,"err_code":0}}}"""),
+        )
+        assertFalse(
+            KasaParse.parseSetAck("""{"${KasaParse.LIGHTING_SERVICE}":{"transition_light_state":{"err_code":-1}}}"""),
+        )
+    }
+
     @Test fun cmdSetRelayEncodesState() {
         assertTrue(KasaParse.cmdSetRelay(true).contains("\"state\":1"))
         assertTrue(KasaParse.cmdSetRelay(false).contains("\"state\":0"))
+    }
+
+    @Test fun cmdSetLightEncodesOnOffInLightingService() {
+        assertTrue(KasaParse.cmdSetLight(true).contains("\"on_off\":1"))
+        assertTrue(KasaParse.cmdSetLight(false).contains("\"on_off\":0"))
+        assertTrue(KasaParse.cmdSetLight(true).contains(KasaParse.LIGHTING_SERVICE))
     }
 }
