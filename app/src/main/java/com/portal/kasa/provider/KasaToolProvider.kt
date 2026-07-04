@@ -18,7 +18,8 @@ import java.util.concurrent.TimeUnit
  * The assistant's voice entry point (ToolContract): an exported [ContentProvider] the assistant discovers and
  * calls to control plugs by name. A thin shell over [KasaToolHandler], which runs the tools against the single
  * `KasaRepository` shared with the UI (resolved from [Graph][com.portal.kasa.Graph]) — so a warm app resolves
- * instantly; a cold start does one LAN discovery to populate the cache.
+ * instantly; a cold start seeds from the disk snapshot and runs a cheap unicast confirm sweep (falling back to
+ * a full LAN discovery only when there is no snapshot).
  *
  * `call()` runs on a Binder thread; the handler is offloaded to a worker bounded by [INVOKE_TIMEOUT_MS] (under
  * the assistant's ~5 s budget) so a slow/hung LAN can't wedge the voice turn — it returns a speakable error

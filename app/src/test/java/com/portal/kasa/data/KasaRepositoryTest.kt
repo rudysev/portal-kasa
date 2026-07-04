@@ -11,7 +11,9 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 /**
  * Pure JVM tests for the discovery/send pipeline — **previously impossible** while [KasaRepository] was a
@@ -179,5 +181,127 @@ class KasaRepositoryTest {
 
         assertFalse(ok)
         assertFalse(repo.snapshot().single().on) // reverted to last-known state
+    }
+
+    // --- warm-start disk snapshot ---
+
+    @get:Rule val tmp = TemporaryFolder()
+
+    private fun diskRepo(client: FakeClient, cache: PlugDiskCache): KasaRepository {
+        val dispatcher = UnconfinedTestDispatcher() // unconfined → the seed job runs eagerly at construction
+        return KasaRepository(client, io = dispatcher, relayDispatcher = dispatcher, diskCache = cache, scope = CoroutineScope(dispatcher))
+    }
+
+    private fun cache(): PlugDiskCache = PlugDiskCache(java.io.File(tmp.root, "plugs.json"))
+
+    @Test fun seedsFromDiskSnapshotWithoutDiscovery() = runTest {
+        val cache = cache().apply { save(listOf(Plug("1", "Lamp", on = true))) }
+        val client = FakeClient(emptyList())
+
+        val repo = diskRepo(client, cache)
+
+        assertEquals(listOf("Lamp"), repo.snapshot().map { it.alias }) // real cards before any sweep
+        assertTrue(repo.ensureLoaded()) // voice fast path: seeded cache satisfies it…
+        assertEquals(0, client.discoverCount) // …with no broadcast discovery
+        assertEquals(listOf(listOf("1")), client.refreshKnownCalls) // …just the cheap unicast confirm sweep
+    }
+
+    @Test fun ensureLoadedConfirmsSeededStateByUnicast() = runTest {
+        // The seed alone can't be trusted (state ages, DHCP moves ips): the first ensureLoaded of a process
+        // must run the directed confirm sweep so voice acts on current state, not the snapshot's.
+        val cache = cache().apply { save(listOf(Plug("1", "Lamp", on = false))) }
+        val client = FakeClient(listOf(Device("1", "Lamp", on = true))) // flipped since the snapshot
+
+        val repo = diskRepo(client, cache)
+        repo.ensureLoaded()
+
+        assertTrue(repo.snapshot().single().on) // confirm sweep refreshed the seeded state
+        assertEquals(0, client.discoverCount) // still no broadcast
+
+        client.refreshKnownCalls.clear()
+        repo.ensureLoaded()
+        assertTrue(client.refreshKnownCalls.isEmpty()) // once live-confirmed, ensureLoaded is a no-op again
+    }
+
+    @Test fun liveSweepOverridesSeededState() = runTest {
+        val cache = cache().apply { save(listOf(Plug("1", "Lamp", on = false))) }
+        val client = FakeClient(listOf(Device("1", "Lamp", on = true))) // flipped since the snapshot
+
+        val repo = diskRepo(client, cache)
+        repo.refresh()
+
+        assertTrue(repo.snapshot().single().on) // discovery is authoritative over the snapshot
+    }
+
+    @Test fun seededPlugGoneFromLanIsDroppedByBroadcastMisses() = runTest {
+        val cache = cache().apply { save(listOf(Plug("1", "Lamp", on = true), Plug("9", "Moved", on = false))) }
+        val client = FakeClient(listOf(Device("1", "Lamp", on = true))) // "Moved" no longer answers
+
+        val repo = diskRepo(client, cache)
+        repeat(3) { repo.refresh() } // MAX_MISSES broadcast misses
+
+        assertEquals(listOf("Lamp"), repo.snapshot().map { it.alias }) // stale card ages out normally
+    }
+
+    @Test fun seededBulbKindRoutesAToggleBeforeAnySweep() = runTest {
+        // A voice toggle right after a cold start must route from the seeded kind — there has been no
+        // discovery yet, so kindByIp has only the snapshot to go on.
+        val cache = cache().apply { save(listOf(Plug("1", "Globe", on = false, isBulb = true))) }
+        val client = FakeClient(emptyList())
+
+        val repo = diskRepo(client, cache)
+        repo.setRelay("1", on = true)
+
+        assertEquals(listOf(true), client.bulbFlags) // sent the lighting command, not set_relay_state
+    }
+
+    @Test fun refreshPersistsTheMergedListToDisk() = runTest {
+        val cache = cache()
+        val client = FakeClient(listOf(Device("1", "Lamp", on = true)))
+
+        diskRepo(client, cache).refresh()
+
+        assertEquals(listOf(Plug("1", "Lamp", on = true)), cache.load()) // next cold start seeds from this
+    }
+
+    @Test fun emptySweepDoesNotClobberTheSnapshot() = runTest {
+        val cache = cache().apply { save(listOf(Plug("1", "Lamp", on = true))) }
+        val client = FakeClient(emptyList()) // Wi-Fi blip: nothing answers
+
+        diskRepo(client, cache).refresh()
+
+        assertEquals(listOf(Plug("1", "Lamp", on = true)), cache.load()) // snapshot survives the blip
+    }
+
+    @Test fun persistSkipsRewritingAnUnchangedList() = runTest {
+        // The plug list is highly stable and the 30s tick sweeps constantly on an always-on device — identical
+        // results must not rewrite the file every time (flash wear for zero information).
+        val file = java.io.File(tmp.root, "plugs.json")
+        val client = FakeClient(listOf(Device("1", "Lamp", on = true)))
+        val repo = diskRepo(client, PlugDiskCache(file))
+        repo.refresh() // first sweep persists
+        assertTrue(file.exists())
+
+        file.delete() // observable probe: a redundant write would recreate it
+        repo.syncKnown() // same list again
+        assertFalse(file.exists()) // skipped — nothing changed
+
+        client.devices = listOf(Device("1", "Lamp", on = false)) // a real change
+        repo.syncKnown()
+        assertEquals(listOf(Plug("1", "Lamp", on = false)), PlugDiskCache(file).load()) // written again
+    }
+
+    @Test fun failedUiToggleKicksARediscover() = runTest {
+        // The UI has no retry, so a failed tap (stale seeded ip, plug moved) must at least rediscover — the
+        // card set corrects within a sweep and the next tap targets the fresh ip.
+        val client = FakeClient(listOf(Device("1", "Lamp", on = false)), relayOk = { _, _ -> false })
+        val repo = repo(client)
+        repo.refresh()
+        assertEquals(1, client.discoverCount)
+
+        repo.toggle("1", on = true) // send fails
+
+        assertEquals(2, client.discoverCount) // one background rediscover kicked
+        assertFalse(repo.snapshot().single().on) // optimistic flip still reverted
     }
 }

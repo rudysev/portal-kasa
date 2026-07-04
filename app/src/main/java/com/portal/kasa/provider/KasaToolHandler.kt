@@ -25,7 +25,9 @@ class KasaToolHandler(private val repository: KasaRepository) {
     }
 
     private suspend fun listPlugs(): String {
-        if (repository.snapshot().isEmpty()) repository.refresh()
+        // ensureLoaded (not a bare isEmpty→refresh) so this joins the disk seed and gets the confirm sweep —
+        // otherwise a cold turn races the seed into a needless discovery, or serves never-reverified state.
+        repository.ensureLoaded()
         val arr = JSONArray()
         repository.snapshot().forEach { arr.put(JSONObject().put("name", it.alias).put("on", it.on)) }
         if (arr.length() == 0) return err("no plugs found on the network — check they're on the same Wi-Fi")
@@ -34,6 +36,7 @@ class KasaToolHandler(private val repository: KasaRepository) {
     }
 
     private suspend fun setPlug(args: JSONObject): String {
+        val started = System.nanoTime()
         val name = args.optString("plug_name").trim()
         if (name.isBlank()) return err("plug_name required")
         if (!args.has("on")) return err("on (true/false) required")
@@ -49,7 +52,21 @@ class KasaToolHandler(private val repository: KasaRepository) {
                 .toString()
                 .also { DebugLog.log("kasa set_plug no match for \"$name\" (candidates=${match.candidates})") }
 
-        val ok = repository.setRelay(pick.id, on)
+        var ok = repository.setRelay(pick.id, on)
+        if (!ok && canRetry(started, pick.alias, candidates)) {
+            // The cache can be a stale warm-start snapshot (DHCP may have moved the plug since the last
+            // sweep): rediscover, then look for the *same alias at a different ip* and retry once. An exact
+            // alias lookup, not a fuzzy re-match — the merge keeps the old-ip card around for a few sweeps,
+            // so the same alias briefly appears twice and a fuzzy match would call that ambiguous. Requiring
+            // exactly ONE such card keeps the retry to the moved-plug case; same ip after the sweep →
+            // genuinely unreachable, don't burn the voice turn's budget resending.
+            repository.refresh()
+            val moved = repository.snapshot().filter { it.alias == pick.alias && it.ip != pick.id }
+            if (moved.size == 1) {
+                DebugLog.log("kasa set_plug \"${pick.alias}\" moved ${pick.id} → ${moved.single().ip}, retrying")
+                ok = repository.setRelay(moved.single().ip, on)
+            }
+        }
         DebugLog.log("kasa set_plug \"${pick.alias}\"=$on → $ok")
         return if (ok) {
             JSONObject()
@@ -62,10 +79,35 @@ class KasaToolHandler(private val repository: KasaRepository) {
         }
     }
 
+    /**
+     * Whether the rediscover-and-retry is safe to run after a failed send:
+     * - **Budget**: the retry costs a ~1.5 s sweep plus a send; past [RETRY_BUDGET_MS] elapsed it would blow
+     *   the provider's 4 s invoke cap — and a send racing that timeout can't be cancelled (blocking socket),
+     *   so it could flip the plug *after* the assistant already spoke failure. Better an honest error.
+     * - **Ambiguity**: with two plugs sharing [alias], PlugMatch auto-picks one of them on the exact-name tie;
+     *   retrying "the same alias at another ip" would then actuate the *other physical device* and call it
+     *   success. If the alias wasn't unique before the send, don't retry.
+     */
+    private fun canRetry(startedNanos: Long, alias: String, candidates: List<PlugMatch.Candidate>): Boolean {
+        val elapsedMs = (System.nanoTime() - startedNanos) / 1_000_000
+        if (elapsedMs >= RETRY_BUDGET_MS) {
+            DebugLog.log("kasa set_plug \"$alias\" retry skipped: ${elapsedMs}ms elapsed (budget $RETRY_BUDGET_MS)")
+            return false
+        }
+        if (candidates.count { it.alias == alias } != 1) {
+            DebugLog.log("kasa set_plug \"$alias\" retry skipped: duplicate alias")
+            return false
+        }
+        return true
+    }
+
     private fun err(message: String): String = JSONObject().put("error", message).toString()
 
     companion object {
         const val TOOL_LIST_PLUGS = "com.portal.kasa.list_plugs"
         const val TOOL_SET_PLUG = "com.portal.kasa.set_plug"
+
+        /** Max elapsed ms after which the retry (a ~1.5 s sweep + send) no longer fits the provider's 4 s cap. */
+        private const val RETRY_BUDGET_MS = 2_000L
     }
 }

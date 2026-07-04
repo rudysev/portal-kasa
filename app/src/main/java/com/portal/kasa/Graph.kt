@@ -2,8 +2,10 @@ package com.portal.kasa
 
 import android.content.Context
 import com.portal.kasa.data.KasaRepository
+import com.portal.kasa.data.PlugDiskCache
 import com.portal.kasa.net.KasaLocalClient
 import kotlinx.coroutines.Dispatchers
+import java.io.File
 
 /**
  * Minimal, dependency-free object graph — the one place [KasaRepository] is constructed and held, so the
@@ -23,6 +25,9 @@ object Graph {
             instance ?: KasaRepository(
                 client = KasaLocalClient(context.applicationContext),
                 io = Dispatchers.IO, // relayDispatcher defaults to io.limitedParallelism(MAX_PARALLEL_SENDS)
+                // Warm-start snapshot: cold app/voice starts act on the last-known plugs instead of waiting
+                // out a discovery sweep (internal storage — plug names/ips never leave the app sandbox).
+                diskCache = PlugDiskCache(File(context.applicationContext.filesDir, "plugs.json")),
             ).also { instance = it }
         }
 }
