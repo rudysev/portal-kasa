@@ -15,12 +15,31 @@ android {
     versionName = "1.0.1"
   }
 
+  buildTypes {
+    release {
+      // Sideloaded (no store), so the debug key is the signing story — what matters for Portal cold-start
+      // is that the build is non-debuggable (PackageManager skips install-time dexopt for debuggable APKs,
+      // leaving ART to re-verify every dex from the APK on each launch) and R8-shrunk (14 unshrunk debug
+      // dex files → one small one, so class loading and JIT have far less to chew).
+      isMinifyEnabled = true
+      isShrinkResources = true
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      signingConfig = signingConfigs.getByName("debug")
+    }
+  }
+
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
   }
   buildFeatures {
     compose = true
+  }
+
+  lint {
+    // Play-store rule, not ours: this app is sideloaded onto Portal hardware (no GMS/Play), and
+    // targetSdk 29 is deliberate — it's the newest OS any Portal runs.
+    disable += "ExpiredTargetSdkVersion"
   }
 }
 
