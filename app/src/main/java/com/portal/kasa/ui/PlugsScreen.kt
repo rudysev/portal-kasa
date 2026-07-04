@@ -59,6 +59,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -544,18 +545,18 @@ private fun LoadingGrid(compact: Boolean, gap: Dp) {
             .semantics { contentDescription = "Looking for plugs on your Wi-Fi" },
     ) {
         BalancedGrid(count = skeletonCount, compact = compact, gap = gap) {
-            SkeletonCard(alpha = { alpha })
+            SkeletonCard(pulseAlpha = { alpha })
         }
     }
 }
 
 /**
- * [alpha] is a lambda, not a value, so the pulse is read only inside [graphicsLayer] — each animation frame
- * then updates the layer directly instead of recomposing/redrawing the card, which matters during startup
- * when this animation runs concurrently with first-launch JIT and discovery.
+ * [pulseAlpha] is a lambda, not a value, so the pulse is read only inside [graphicsLayer] — each animation
+ * frame then updates the layer directly instead of recomposing/redrawing the card, which matters during
+ * startup when this animation runs concurrently with first-launch JIT and discovery.
  */
 @Composable
-private fun SkeletonCard(alpha: () -> Float) {
+private fun SkeletonCard(pulseAlpha: () -> Float) {
     val ph = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f)
     Box(
         Modifier
@@ -566,11 +567,18 @@ private fun SkeletonCard(alpha: () -> Float) {
             .padding(22.dp),
     ) {
         // The pulse fades only the placeholder blobs (the card chrome stays steady), so the layer wraps the
-        // Row that contains them rather than the whole card.
+        // Row that contains them rather than the whole card. ModulateAlpha folds the fade into each draw call
+        // instead of promoting the Row to an offscreen buffer (the layer's default for alpha < 1) — safe here
+        // because the blobs never overlap, and it spares the GPU a per-frame composite pass per card.
         Row(
-            Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha() },
+            Modifier.fillMaxSize().graphicsLayer {
+                alpha = pulseAlpha()
+                compositingStrategy = CompositingStrategy.ModulateAlpha
+            },
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Keep these blobs non-overlapping: ModulateAlpha (above) fades each draw independently, so
+            // overlapping translucent children (e.g. a shimmer gradient over a blob) would double-darken.
             Box(Modifier.size(60.dp).clip(CircleShape).background(ph))
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
