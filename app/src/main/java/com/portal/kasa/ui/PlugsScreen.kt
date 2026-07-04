@@ -59,7 +59,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -300,7 +300,13 @@ private fun RefreshButton(
                 animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Restart),
                 label = "angle",
             )
-            Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp).rotate(angle))
+            // Read the angle only inside graphicsLayer (not Modifier.rotate, which reads at composition), so
+            // each spin frame updates the layer without recomposing — see the SkeletonCard note.
+            Icon(
+                Icons.Filled.Refresh,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = angle },
+            )
         } else {
             Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
         }
@@ -538,14 +544,19 @@ private fun LoadingGrid(compact: Boolean, gap: Dp) {
             .semantics { contentDescription = "Looking for plugs on your Wi-Fi" },
     ) {
         BalancedGrid(count = skeletonCount, compact = compact, gap = gap) {
-            SkeletonCard(alpha = alpha)
+            SkeletonCard(alpha = { alpha })
         }
     }
 }
 
+/**
+ * [alpha] is a lambda, not a value, so the pulse is read only inside [graphicsLayer] — each animation frame
+ * then updates the layer directly instead of recomposing/redrawing the card, which matters during startup
+ * when this animation runs concurrently with first-launch JIT and discovery.
+ */
 @Composable
-private fun SkeletonCard(alpha: Float) {
-    val ph = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f * alpha)
+private fun SkeletonCard(alpha: () -> Float) {
+    val ph = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f)
     Box(
         Modifier
             .fillMaxSize()
@@ -554,7 +565,12 @@ private fun SkeletonCard(alpha: Float) {
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
             .padding(22.dp),
     ) {
-        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+        // The pulse fades only the placeholder blobs (the card chrome stays steady), so the layer wraps the
+        // Row that contains them rather than the whole card.
+        Row(
+            Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha() },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Box(Modifier.size(60.dp).clip(CircleShape).background(ph))
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
