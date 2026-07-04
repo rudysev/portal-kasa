@@ -17,10 +17,9 @@ android {
 
   buildTypes {
     release {
-      // Sideloaded (no store), so the debug key is the signing story — what matters for Portal cold-start
-      // is that the build is non-debuggable (PackageManager skips install-time dexopt for debuggable APKs,
-      // leaving ART to re-verify every dex from the APK on each launch) and R8-shrunk (14 unshrunk debug
-      // dex files → one small one, so class loading and JIT have far less to chew).
+      // Sideload-only, so the debug key signs release too. What matters for Portal cold start: non-debuggable
+      // builds get install-time dexopt (debuggable sideloads run straight from the APK), and R8 strips the
+      // unshrunk debug dex bloat.
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

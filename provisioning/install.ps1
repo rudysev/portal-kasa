@@ -6,7 +6,7 @@
 #
 # Usage:
 #   .\install.ps1             install portal-kasa on the connected Portal (downloads the latest release)
-#   .\install.ps1 -Local      install a locally built APK (the repo's debug build; -Apk <path> to override)
+#   .\install.ps1 -Local      install a locally built APK (the repo's release build; -Apk <path> to override)
 #   .\install.ps1 -Uninstall  remove it
 #   .\install.ps1 -Status     show whether it's installed
 param([switch]$Uninstall, [switch]$Status, [switch]$Local, [string]$Apk)
@@ -39,8 +39,8 @@ Get-Content config.env | ForEach-Object {
   }
 }
 
-# Local-install support (-Local): the repo's standard debug build output. -Apk overrides the path.
-$LocalApk = if ($Local) { if ($Apk) { $Apk } else { Join-Path $ScriptDir "..\app\build\outputs\apk\debug\app-debug.apk" } } else { "" }
+# Local-install support (-Local): the repo's optimized release build. -Apk overrides the path.
+$LocalApk = if ($Local) { if ($Apk) { $Apk } else { Join-Path $ScriptDir "../app/build/outputs/apk/release/app-release.apk" } } else { "" }
 
 # ----- resolve adb (bundled -> PATH -> download) -----------------------------
 function Resolve-Adb {
@@ -111,7 +111,7 @@ function Resolve-ReleaseAsset {
 
 function Install-App {
   if ($LocalApk) {
-    if (-not (Test-Path $LocalApk)) { Die "Local build not found: $LocalApk (run .\gradlew assembleDebug first, or pass -Apk <path>)." }
+    if (-not (Test-Path $LocalApk)) { Die "Local build not found: $LocalApk (run .\gradlew assembleRelease first, or pass -Apk <path>)." }
     $apk = Get-Item $LocalApk
     Step "Using local build: $($apk.FullName)"
   } else {

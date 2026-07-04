@@ -53,15 +53,19 @@ the same Wi-Fi are listed automatically. To remove it, double-click **`Uninstall
 
 ## Build / run
 
-For developers with a JDK 21 toolchain and the Android SDK: build, install, and launch on a USB-connected
-Portal (with **Settings → Debug → ADB Enabled**) in one step —
+For developers with a JDK 21 toolchain and the Android SDK: build the optimized release APK
+(non-debuggable, R8-minified — the Portal dexopts it at install, so it cold-starts far faster than a
+debug build), then install and launch it with the provisioning installer on a USB-connected Portal
+(with **Settings → Debug → ADB Enabled**) —
 
 ```bash
-./setup.sh
+./gradlew assembleRelease
+./provisioning/install.sh --local
 ```
 
-`setup.sh` builds the debug APK if it's missing, then installs and launches it via
-[hzdb](https://github.com/meta-quest/hzdb).
+The same installer upgrades over a previously installed debug build in place (both are signed with the
+debug key). Use a debug build only when actively debugging: `./gradlew assembleDebug`, then
+`./provisioning/install.sh --local app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Notes
 

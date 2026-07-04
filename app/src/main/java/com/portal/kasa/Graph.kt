@@ -25,8 +25,7 @@ object Graph {
             instance ?: KasaRepository(
                 client = KasaLocalClient(context.applicationContext),
                 io = Dispatchers.IO, // relayDispatcher defaults to io.limitedParallelism(MAX_PARALLEL_SENDS)
-                // Warm-start snapshot: cold app/voice starts act on the last-known plugs instead of waiting
-                // out a discovery sweep (internal storage — plug names/ips never leave the app sandbox).
+                // Warm-start snapshot: cold starts act on last-known plugs instead of waiting out a discovery.
                 diskCache = PlugDiskCache(File(context.applicationContext.filesDir, "plugs.json")),
             ).also { instance = it }
         }

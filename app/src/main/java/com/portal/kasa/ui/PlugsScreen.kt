@@ -301,8 +301,7 @@ private fun RefreshButton(
                 animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Restart),
                 label = "angle",
             )
-            // Read the angle only inside graphicsLayer (not Modifier.rotate, which reads at composition), so
-            // each spin frame updates the layer without recomposing — see the SkeletonCard note.
+            // Angle is read only inside graphicsLayer, so each spin frame skips recomposition.
             Icon(
                 Icons.Filled.Refresh,
                 contentDescription = null,
@@ -566,10 +565,8 @@ private fun SkeletonCard(pulseAlpha: () -> Float) {
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
             .padding(22.dp),
     ) {
-        // The pulse fades only the placeholder blobs (the card chrome stays steady), so the layer wraps the
-        // Row that contains them rather than the whole card. ModulateAlpha folds the fade into each draw call
-        // instead of promoting the Row to an offscreen buffer (the layer's default for alpha < 1) — safe here
-        // because the blobs never overlap, and it spares the GPU a per-frame composite pass per card.
+        // The pulse fades only the blobs (the card chrome stays steady), so the layer wraps just this Row.
+        // ModulateAlpha folds the fade into each draw instead of an offscreen buffer (the default for alpha < 1).
         Row(
             Modifier.fillMaxSize().graphicsLayer {
                 alpha = pulseAlpha()
@@ -577,8 +574,8 @@ private fun SkeletonCard(pulseAlpha: () -> Float) {
             },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Keep these blobs non-overlapping: ModulateAlpha (above) fades each draw independently, so
-            // overlapping translucent children (e.g. a shimmer gradient over a blob) would double-darken.
+            // Keep the blobs non-overlapping — under ModulateAlpha, overlapping translucent children would
+            // double-darken.
             Box(Modifier.size(60.dp).clip(CircleShape).background(ph))
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {

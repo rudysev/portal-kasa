@@ -8,7 +8,7 @@
 #
 # Usage:
 #   ./install.sh             install portal-kasa on the connected Portal (downloads the latest release)
-#   ./install.sh --local     install a locally built APK (the repo's debug build; pass a path to override)
+#   ./install.sh --local     install a locally built APK (the repo's release build; pass a path to override)
 #   ./install.sh --uninstall remove it
 #   ./install.sh --status    show whether it's installed
 
@@ -28,9 +28,10 @@ die()  { printf "%sERROR:%s %s\n" "$R" "$N" "$1" >&2; exit 1; }
 # shellcheck disable=SC1091
 set -a; . ./config.env; set +a
 
-# Local-install support (--local): the repo's standard debug build output, used when
-# installing a build instead of downloading a release. Override with --local <apk>.
-DEFAULT_BUILD_APK="$SCRIPT_DIR/../app/build/outputs/apk/debug/app-debug.apk"
+# Local-install support (--local): the repo's optimized release build (non-debuggable, so the Portal
+# dexopts it at install), used when installing a build instead of downloading a release. Override with
+# --local <apk>.
+DEFAULT_BUILD_APK="$SCRIPT_DIR/../app/build/outputs/apk/release/app-release.apk"
 LOCAL_APK=""
 
 # ----- resolve adb (bundled -> PATH -> download) -----------------------------
@@ -124,7 +125,7 @@ resolve_release_asset() {
 install_app() {
   local apk
   if [ -n "$LOCAL_APK" ]; then
-    [ -f "$LOCAL_APK" ] || die "Local build not found: $LOCAL_APK (run ./gradlew assembleDebug first, or pass a path: --local <apk>)."
+    [ -f "$LOCAL_APK" ] || die "Local build not found: $LOCAL_APK (run ./gradlew assembleRelease first, or pass a path: --local <apk>)."
     apk="$LOCAL_APK"
     step "Using local build: $apk"
   else

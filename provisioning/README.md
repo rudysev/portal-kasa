@@ -36,7 +36,7 @@ Double-click **`Uninstall-PortalKasa`** (`.command` on macOS, `.bat` on Windows)
 - **Same Wi-Fi only:** the Portal and the plugs must be on the same network.
 - **Advanced:** the scripts (`install.sh` / `install.ps1`) also accept `--local`
   (`-Local`) to install a locally built APK, plus `--uninstall` (`-Uninstall`) and
-  `--status` (`-Status`). `--local` uses the repo's debug build (`app/build/.../app-debug.apk`),
+  `--status` (`-Status`). `--local` uses the repo's release build (`app/build/.../app-release.apk`),
   or pass a path (`--local <apk>` / `-Apk <path>`); you can also drop an `.apk` into the
   `apks/` folder next to the scripts. Otherwise the latest published release is
   downloaded. Settings live in `config.env`.

@@ -25,8 +25,7 @@ class KasaToolHandler(private val repository: KasaRepository) {
     }
 
     private suspend fun listPlugs(): String {
-        // ensureLoaded (not a bare isEmpty→refresh) so this joins the disk seed and gets the confirm sweep —
-        // otherwise a cold turn races the seed into a needless discovery, or serves never-reverified state.
+        // ensureLoaded joins the disk seed and runs the confirm sweep — a bare isEmpty→refresh would race it.
         repository.ensureLoaded()
         val arr = JSONArray()
         repository.snapshot().forEach { arr.put(JSONObject().put("name", it.alias).put("on", it.on)) }
@@ -54,12 +53,10 @@ class KasaToolHandler(private val repository: KasaRepository) {
 
         var ok = repository.setRelay(pick.id, on)
         if (!ok && canRetry(started, pick.alias, candidates)) {
-            // The cache can be a stale warm-start snapshot (DHCP may have moved the plug since the last
-            // sweep): rediscover, then look for the *same alias at a different ip* and retry once. An exact
-            // alias lookup, not a fuzzy re-match — the merge keeps the old-ip card around for a few sweeps,
-            // so the same alias briefly appears twice and a fuzzy match would call that ambiguous. Requiring
-            // exactly ONE such card keeps the retry to the moved-plug case; same ip after the sweep →
-            // genuinely unreachable, don't burn the voice turn's budget resending.
+            // Stale snapshot (DHCP moved the plug): rediscover, then retry the same alias at its ONE new ip.
+            // Exact-alias, not a fuzzy re-match — the merge keeps the old-ip card for a few sweeps, and a
+            // fuzzy match would call that duplicate ambiguous. Same ip after the sweep → genuinely
+            // unreachable, no resend.
             repository.refresh()
             val moved = repository.snapshot().filter { it.alias == pick.alias && it.ip != pick.id }
             if (moved.size == 1) {

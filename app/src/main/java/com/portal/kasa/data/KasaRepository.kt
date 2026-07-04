@@ -85,11 +85,10 @@ class KasaRepository(
     private val rediscoverPending = AtomicBoolean(false)
 
     /**
-     * Seed the cache from the disk snapshot (runs once, on [scope]'s IO): the dashboard renders real cards on
-     * its first frame and a cold voice turn can act without a discovery sweep. Seeds [_plugs] only if a live
-     * sweep hasn't already populated it, but always back-fills [kindByIp] (kinds are stable and needed to
-     * route a toggle even for plugs a later merge drops) — live-discovered kinds win via `putIfAbsent`.
-     * [ensureLoaded] joins this job so the voice path can't race a still-loading snapshot into a discovery.
+     * Seed the cache from the disk snapshot (once, on [scope]'s IO) so the first frame shows real cards and a
+     * cold voice turn needn't discover. Seeds [_plugs] only while a live sweep hasn't populated it, but always
+     * back-fills [kindByIp] via `putIfAbsent` (kinds are stable and must route toggles even for dropped cards;
+     * live-discovered kinds win). [ensureLoaded] joins this job.
      */
     private val seedJob: Job? = diskCache?.let { cache ->
         scope.launch {
@@ -146,14 +145,11 @@ class KasaRepository(
     }
 
     /**
-     * Write [plugs] — the exact list [store] just put in the cache, not a re-read that could pick up a
-     * concurrent tap — to the disk snapshot. Called only with [refreshMutex] held, so writes are ordered and
-     * [lastPersisted] needs no lock of its own; identical lists are skipped (the plug list is highly stable,
-     * so this turns the 30 s foreground tick's write into a no-op instead of steady flash wear). An empty list
-     * is never written, so a discovery blip can't clobber a good snapshot (the same protection [store] gives
-     * the in-memory cache via `lastGood`). A plug mid-toggle at merge time carries its optimistic on/off into
-     * the snapshot (the merge preserves pending state) — acceptable for a warm-start hint, since the next
-     * sweep (≤30 s away in the foreground, or the next cold start's confirm sweep) reconciles it.
+     * Write [plugs] — the exact list [store] just cached, so a concurrent tap's optimistic flip can't slip
+     * in — to the disk snapshot. Runs with [refreshMutex] held: writes stay ordered and [lastPersisted] needs
+     * no lock. Skips identical lists (no steady flash wear from the periodic tick) and empty ones (a blip
+     * must not clobber a good snapshot). A plug mid-toggle at merge time does carry its optimistic on/off
+     * into the snapshot — fine for a warm-start hint; the next sweep reconciles it.
      */
     private suspend fun persist(plugs: List<Plug>) {
         val cache = diskCache ?: return
@@ -163,13 +159,10 @@ class KasaRepository(
     }
 
     /**
-     * Store a discovery/refresh result into the cache under [cacheLock] and return the list now cached: a
-     * totally empty result is treated as a local blip and left intact; otherwise [merge] produces the new list
-     * (the caller picks the broadcast membership merge or the unicast state-only merge) and the cache counts as
-     * live-confirmed ([liveConfirmed]). Also records each device's (stable) kind in [kindByIp]. Returning the
-     * stored list (rather than a later `_plugs.value` re-read) lets the caller persist exactly what this sweep
-     * merged, not a snapshot a concurrent optimistic tap may have flipped in the meantime. Shared by
-     * [broadcastDiscover] and [syncKnown].
+     * Store a sweep result into the cache under [cacheLock] and return the list now cached: an empty result is
+     * a local blip and leaves the cache intact; otherwise [merge] (broadcast membership or unicast state-only)
+     * produces the new list and the cache counts as live-confirmed. Also records each device's stable kind in
+     * [kindByIp]. Returns the stored list so the caller persists exactly what this sweep merged.
      */
     private inline fun store(found: List<Plug>, merge: (List<Plug>) -> List<Plug>): List<Plug> {
         found.forEach { kindByIp[it.ip] = it.isBulb } // remember kinds even for plugs a later merge may drop
@@ -187,17 +180,13 @@ class KasaRepository(
     }
 
     /**
-     * Ensure plugs are loaded and trustworthy — the voice provider's entry point. Joins the disk seed (a ~ms
-     * read, so a cold voice turn can't race it into a discovery), then: an empty cache does a full broadcast
-     * discover; a cache that is *only* the disk seed ([liveConfirmed] false) runs the cheap directed
-     * [syncKnown] first. That confirm sweep is what makes acting on a snapshot safe: it refreshes on/off
-     * state (a voice-only user whose cold turns never open the app still gets current answers) and re-reads
-     * each ip's alias, so an ip DHCP-reassigned to a *different* device since the snapshot stops matching the
-     * old name instead of being commanded as it (an honest "no plug called X" beats actuating the wrong
-     * device). Costs one sub-second unicast round on the first voice turn of a process; after any live sweep
-     * it's a no-op. Note the confirm sweep verifies state/alias **at known ips only** — it cannot fix
-     * membership drift (a plug at a brand-new ip is only found by broadcast; the voice retry and the UI's
-     * failed-tap rediscover cover that case).
+     * Ensure plugs are loaded and trustworthy — the voice provider's entry point. Joins the disk seed (so a
+     * cold turn can't race it into a discovery), then: an empty cache broadcast-discovers; a cache that is
+     * *only* the disk seed ([liveConfirmed] false) first runs the directed [syncKnown] as a confirm sweep.
+     * That sweep is what makes acting on a snapshot safe: it refreshes on/off state and re-reads each ip's
+     * alias, so an ip DHCP-reassigned to a different device stops matching its old name (an honest "no plug
+     * called X" beats actuating the wrong device). It verifies known ips only — membership drift (a plug at a
+     * brand-new ip) remains broadcast's job, covered by the voice retry and the UI's failed-tap rediscover.
      */
     suspend fun ensureLoaded(): Boolean {
         seedJob?.join()
@@ -210,13 +199,10 @@ class KasaRepository(
      * UI toggle: mark the desired state, flip the cache optimistically (synchronously — the Switch moves now),
      * and send in the background, coalesced per plug. Safe to call rapidly from the main thread.
      *
-     * A **failed** tap additionally queues one background rediscover: the card's ip may be stale (a disk-seeded
-     * snapshot after DHCP churn, with the app-open sweep lost to a Wi-Fi blip), and unlike the voice path the
-     * UI has no retry — rediscovering corrects the card set within a sweep so the *next* tap targets the fresh
-     * ip, instead of the Switch silently snapping back until the next periodic broadcast (minutes away). It
-     * must *queue* behind a sweep already holding [refreshMutex] rather than skip (a concurrent unicast tick
-     * can only refresh known ips — it can never find the plug's new address); [rediscoverPending] coalesces a
-     * mashed dead card into a single queued broadcast instead of piling up 1.5 s sweeps.
+     * A **failed** tap queues one background rediscover: the card's ip may be stale (disk-seeded snapshot
+     * after DHCP churn) and the UI has no retry — a broadcast corrects the card set so the *next* tap targets
+     * the fresh ip. It must *queue* behind a sweep holding [refreshMutex], not skip (a unicast tick can never
+     * find a moved plug's new address); [rediscoverPending] coalesces mashing into a single queued broadcast.
      */
     fun toggle(ip: String, on: Boolean) {
         desired[ip] = on // mark pending *before* the optimistic flip so a refresh in the gap can't overwrite it
