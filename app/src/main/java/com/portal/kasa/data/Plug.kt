@@ -12,4 +12,9 @@ data class Plug(
     val on: Boolean,
     /** Smart bulb vs plug/switch — carried from discovery so a toggle sends the right command (bulbs have no relay). */
     val isBulb: Boolean = false,
+    /**
+     * The device's stable `get_sysinfo` `deviceId` — its identity across DHCP moves, where [ip] is only its
+     * current address. Blank when unknown (a snapshot written before it was tracked, or a device that omits it).
+     */
+    val deviceId: String = "",
 )

@@ -36,17 +36,19 @@ object KasaParse {
         return String(out, Charsets.UTF_8)
     }
 
-    /** A plug's name, on/off state, and whether it's a bulb, from a decrypted `get_sysinfo` reply. */
+    /** A plug's name, on/off state, whether it's a bulb, and its stable `deviceId` (blank if absent), from a
+     *  decrypted `get_sysinfo` reply. */
     data class SysInfo(
         val alias: String,
         val on: Boolean,
         val isBulb: Boolean,
+        val deviceId: String = "",
     )
 
     fun parseSysinfo(json: String): SysInfo? = runCatching {
         val sys = JSONObject(json).optJSONObject("system")?.optJSONObject("get_sysinfo") ?: return@runCatching null
         val alias = sys.optString("alias")
-        if (alias.isBlank()) null else SysInfo(alias, isOn(sys), isBulb(sys))
+        if (alias.isBlank()) null else SysInfo(alias, isOn(sys), isBulb(sys), sys.optString("deviceId"))
     }.getOrNull()
 
     /**

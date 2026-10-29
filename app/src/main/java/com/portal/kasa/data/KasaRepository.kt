@@ -124,7 +124,7 @@ class KasaRepository(
         if (known.isEmpty()) {
             broadcastDiscover()
         } else {
-            val found = withContext(io) { client.refreshKnown(known) }.map { Plug(it.ip, it.alias, it.on, it.isBulb) }
+            val found = withContext(io) { client.refreshKnown(known) }.map { Plug(it.ip, it.alias, it.on, it.isBulb, it.deviceId) }
             val stored = store(found) { prev -> PlugMerge.mergeUnicast(prev, found, misses, pendingIps()) }
             persist(stored)
             stored.isNotEmpty()
@@ -138,7 +138,7 @@ class KasaRepository(
      */
     private suspend fun broadcastDiscover(): Boolean {
         // Map the wire type to the domain [Plug] at this boundary — net types don't travel past the repository.
-        val found = withContext(io) { client.discover() }.map { Plug(it.ip, it.alias, it.on, it.isBulb) }
+        val found = withContext(io) { client.discover() }.map { Plug(it.ip, it.alias, it.on, it.isBulb, it.deviceId) }
         val stored = store(found) { prev -> PlugMerge.merge(prev, found, misses, pendingIps(), MAX_MISSES) }
         persist(stored)
         return stored.isNotEmpty()

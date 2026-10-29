@@ -85,4 +85,10 @@ class KasaParseTest {
         assertTrue(KasaParse.cmdSetLight(false).contains("\"on_off\":0"))
         assertTrue(KasaParse.cmdSetLight(true).contains(KasaParse.LIGHTING_SERVICE))
     }
+
+    @Test fun parseSysinfoReadsDeviceId() {
+        val s = KasaParse.parseSysinfo("""{"system":{"get_sysinfo":{"alias":"Lamp","relay_state":1,"deviceId":"8006ABC"}}}""")!!
+        assertEquals("8006ABC", s.deviceId)
+        assertEquals("", KasaParse.parseSysinfo("""{"system":{"get_sysinfo":{"alias":"Lamp","relay_state":1}}}""")!!.deviceId)
+    }
 }

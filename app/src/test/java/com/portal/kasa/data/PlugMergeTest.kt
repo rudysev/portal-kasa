@@ -102,4 +102,36 @@ class PlugMergeTest {
         val merged = PlugMerge.mergeUnicast(listOf(dev("1", "Alpha", on = false)), listOf(dev("9", "Ghost", on = true)), mutableMapOf(), emptySet())
         assertEquals(listOf("Alpha"), merged.map { it.alias })
     }
+
+    @Test fun plugThatMovedIpReplacesItsStaleCardByDeviceId() {
+        // DHCP moved the plug: the old ip goes silent, the same deviceId answers at a new one. That's one
+        // device, not a new plug plus a missing one — the stale card must go now, not after maxMisses sweeps.
+        val misses = mutableMapOf<String, Int>()
+        val stale = Plug("49", "Espresso Machine", on = false, deviceId = "X")
+        val merged = merge(listOf(stale), listOf(Plug("80", "Espresso Machine", on = true, deviceId = "X")), misses)
+        assertEquals(listOf("80"), merged.map { it.ip })
+        assertNull(misses["49"])
+    }
+
+    @Test fun legacyCardWithoutDeviceIdIsSupersededByIdentifiedPlugOfSameAlias() {
+        // Snapshots written before deviceId was tracked: a silent id-less card whose alias an identified plug
+        // now answers to is that plug's leftover (the stuck state issue 01 left on devices).
+        val merged = merge(listOf(Plug("49", "Espresso Machine", on = false)), listOf(Plug("80", "Espresso Machine", on = true, deviceId = "X")))
+        assertEquals(listOf("80"), merged.map { it.ip })
+    }
+
+    @Test fun distinctDevicesSharingAnAliasAreBothKept() {
+        val merged = merge(
+            listOf(Plug("1", "Lamp", on = false, deviceId = "A")),
+            listOf(Plug("2", "Lamp", on = false, deviceId = "B")),
+        )
+        assertEquals(setOf("1", "2"), merged.map { it.ip }.toSet()) // "1" is just missing, miss-counted as usual
+    }
+
+    @Test fun unicastAlsoRetiresALegacyLeftover() {
+        // The cold voice turn's confirm sweep is unicast — it must heal a stuck snapshot too.
+        val prev = listOf(Plug("49", "Espresso Machine", on = false), Plug("80", "Espresso Machine", on = false))
+        val merged = PlugMerge.mergeUnicast(prev, listOf(Plug("80", "Espresso Machine", on = true, deviceId = "X")), mutableMapOf(), emptySet())
+        assertEquals(listOf("80"), merged.map { it.ip })
+    }
 }

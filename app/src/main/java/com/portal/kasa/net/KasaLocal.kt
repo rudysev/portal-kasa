@@ -33,6 +33,7 @@ object KasaLocal {
         val alias: String,
         val on: Boolean,
         val isBulb: Boolean = false,
+        val deviceId: String = "",
     )
 
     /**
@@ -93,7 +94,7 @@ object KasaLocal {
                         DebugLog.log("kasa discover: unparsed reply from $ip len=${pkt.length}")
                         continue
                     }
-                    found[ip] = Device(ip, sys.alias, sys.on, sys.isBulb)
+                    found[ip] = Device(ip, sys.alias, sys.on, sys.isBulb, sys.deviceId)
                 }
             }
         }.onFailure { DebugLog.log("kasa discover failed: ${it.message}") }
@@ -153,7 +154,7 @@ object KasaLocal {
                         DebugLog.log("kasa refresh(known): unparsed reply from $ip len=${pkt.length}")
                         continue
                     }
-                    found[ip] = Device(ip, sys.alias, sys.on, sys.isBulb)
+                    found[ip] = Device(ip, sys.alias, sys.on, sys.isBulb, sys.deviceId)
                 }
             }
         }.onFailure { DebugLog.log("kasa refresh(known) failed: ${it.message}") }

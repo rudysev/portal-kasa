@@ -27,7 +27,7 @@ class PlugDiskCache(private val file: File) {
             if (ip.isBlank() || alias.isBlank()) {
                 null
             } else {
-                Plug(ip, alias, o.optBoolean("on"), o.optBoolean("isBulb"))
+                Plug(ip, alias, o.optBoolean("on"), o.optBoolean("isBulb"), o.optString("deviceId"))
             }
         }
     }.getOrElse {
@@ -39,7 +39,14 @@ class PlugDiskCache(private val file: File) {
         runCatching {
             val arr = JSONArray()
             plugs.forEach {
-                arr.put(JSONObject().put("ip", it.ip).put("alias", it.alias).put("on", it.on).put("isBulb", it.isBulb))
+                arr.put(
+                    JSONObject()
+                        .put("ip", it.ip)
+                        .put("alias", it.alias)
+                        .put("on", it.on)
+                        .put("isBulb", it.isBulb)
+                        .put("deviceId", it.deviceId),
+                )
             }
             val tmp = File(file.parentFile, "${file.name}.tmp")
             java.io.FileOutputStream(tmp).use { out ->

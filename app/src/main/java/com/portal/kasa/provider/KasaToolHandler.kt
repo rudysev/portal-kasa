@@ -42,7 +42,8 @@ class KasaToolHandler(private val repository: KasaRepository) {
         val on = args.optBoolean("on")
 
         if (!repository.ensureLoaded()) return err("no plugs found on the network")
-        val candidates = repository.snapshot().map { PlugMatch.Candidate(it.ip, it.alias) }
+        val known = repository.snapshot()
+        val candidates = known.map { PlugMatch.Candidate(it.ip, it.alias) }
         val match = PlugMatch.best(name, candidates)
         val pick =
             match.pick ?: return JSONObject()
@@ -51,14 +52,16 @@ class KasaToolHandler(private val repository: KasaRepository) {
                 .toString()
                 .also { DebugLog.log("kasa set_plug no match for \"$name\" (candidates=${match.candidates})") }
 
+        val deviceId = known.firstOrNull { it.ip == pick.id }?.deviceId.orEmpty()
         var ok = repository.setRelay(pick.id, on)
-        if (!ok && canRetry(started, pick.alias, candidates)) {
-            // Stale snapshot (DHCP moved the plug): rediscover, then retry the same alias at its ONE new ip.
-            // Exact-alias, not a fuzzy re-match — the merge keeps the old-ip card for a few sweeps, and a
-            // fuzzy match would call that duplicate ambiguous. Same ip after the sweep → genuinely
-            // unreachable, no resend.
+        if (!ok && canRetry(started, pick.alias, deviceId, candidates)) {
+            // Stale snapshot (DHCP moved the plug): rediscover, then retry the same device at its ONE new ip —
+            // matched by deviceId, or by exact alias for an id-less card (not a fuzzy re-match, which could
+            // land on a different plug). Same ip after the sweep → genuinely unreachable, no resend.
             repository.refresh()
-            val moved = repository.snapshot().filter { it.alias == pick.alias && it.ip != pick.id }
+            val moved = repository.snapshot().filter {
+                it.ip != pick.id && if (deviceId.isNotBlank()) it.deviceId == deviceId else it.alias == pick.alias
+            }
             if (moved.size == 1) {
                 DebugLog.log("kasa set_plug \"${pick.alias}\" moved ${pick.id} → ${moved.single().ip}, retrying")
                 ok = repository.setRelay(moved.single().ip, on)
@@ -83,15 +86,21 @@ class KasaToolHandler(private val repository: KasaRepository) {
      *   so it could flip the plug *after* the assistant already spoke failure. Better an honest error.
      * - **Ambiguity**: with two plugs sharing [alias], PlugMatch auto-picks one of them on the exact-name tie;
      *   retrying "the same alias at another ip" would then actuate the *other physical device* and call it
-     *   success. If the alias wasn't unique before the send, don't retry.
+     *   success. So an id-less pick ([deviceId] blank) only retries a unique alias; a pick with a [deviceId]
+     *   retries that device wherever it moved, so a shared alias is no risk.
      */
-    private fun canRetry(startedNanos: Long, alias: String, candidates: List<PlugMatch.Candidate>): Boolean {
+    private fun canRetry(
+        startedNanos: Long,
+        alias: String,
+        deviceId: String,
+        candidates: List<PlugMatch.Candidate>,
+    ): Boolean {
         val elapsedMs = (System.nanoTime() - startedNanos) / 1_000_000
         if (elapsedMs >= RETRY_BUDGET_MS) {
             DebugLog.log("kasa set_plug \"$alias\" retry skipped: ${elapsedMs}ms elapsed (budget $RETRY_BUDGET_MS)")
             return false
         }
-        if (candidates.count { it.alias == alias } != 1) {
+        if (deviceId.isBlank() && candidates.count { it.alias == alias } != 1) {
             DebugLog.log("kasa set_plug \"$alias\" retry skipped: duplicate alias")
             return false
         }

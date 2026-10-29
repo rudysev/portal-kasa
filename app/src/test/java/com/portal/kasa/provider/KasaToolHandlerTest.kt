@@ -152,4 +152,43 @@ class KasaToolHandlerTest {
         assertEquals(1, client.sends.size) // no second send to the other same-named device
         assertEquals("1", client.sends.single().first)
     }
+
+    @Test fun aPlugThatMovedCanStillBeSwitchedOnTheNextTurn() = runTest {
+        // Issue 01: the moved plug's stale-ip card survived the retry's rediscover beside the fresh one, so the
+        // *next* set_plug picked the dead ip and skipped the retry as a "duplicate alias" — on works, off never.
+        val cache = PlugDiskCache(File(tmp.root, "plugs.json"))
+        cache.save(listOf(Plug("10.0.0.49", "Espresso Machine", on = false))) // pre-deviceId snapshot, as on-device
+        val client = FakeClient(
+            listOf(Device("10.0.0.80", "Espresso Machine", on = false, deviceId = "X")),
+            relayOk = { ip, _ -> ip == "10.0.0.80" },
+        )
+        val d = UnconfinedTestDispatcher()
+        val repo = KasaRepository(client, io = d, relayDispatcher = d, diskCache = cache, scope = CoroutineScope(d))
+        val h = KasaToolHandler(repo)
+
+        assertTrue(JSONObject(h.invoke(KasaToolHandler.TOOL_SET_PLUG, """{"plug_name":"espresso machine","on":true}""")).getBoolean("ok"))
+        val off = JSONObject(h.invoke(KasaToolHandler.TOOL_SET_PLUG, """{"plug_name":"espresso machine","on":false}"""))
+
+        assertTrue(off.toString(), off.optBoolean("ok"))
+        assertEquals(listOf("10.0.0.80"), repo.snapshot().map { it.ip }) // the move replaced the stale card
+    }
+
+    @Test fun aMovedPlugSharingItsAliasWithAnotherDeviceStillRetriesTheSameDevice() = runTest {
+        // Two real "Lamp"s; the picked one moved. Identity makes the retry safe: it targets the picked
+        // deviceId's new ip, never the other Lamp.
+        val client = FakeClient(
+            listOf(Device("1", "Lamp", on = false, deviceId = "A"), Device("2", "Lamp", on = false, deviceId = "B")),
+            relayOk = { ip, _ -> ip != "1" },
+        )
+        val d = UnconfinedTestDispatcher()
+        val repo = KasaRepository(client, io = d, relayDispatcher = d, scope = CoroutineScope(d))
+        val h = KasaToolHandler(repo)
+        repo.refresh()
+        client.devices = listOf(Device("3", "Lamp", on = false, deviceId = "A"), Device("2", "Lamp", on = false, deviceId = "B"))
+
+        val r = JSONObject(h.invoke(KasaToolHandler.TOOL_SET_PLUG, """{"plug_name":"lamp","on":true}"""))
+
+        assertTrue(r.toString(), r.optBoolean("ok"))
+        assertEquals(listOf("1" to true, "3" to true), client.sends) // never "2", the other Lamp
+    }
 }

@@ -17,7 +17,7 @@ class PlugDiskCacheTest {
     @Test fun saveThenLoadRoundTripsAllFields() {
         val cache = PlugDiskCache(cacheFile())
         val plugs = listOf(
-            Plug("192.168.1.10", "Coffee Maker", on = true),
+            Plug("192.168.1.10", "Coffee Maker", on = true, deviceId = "8006ABC"),
             Plug("192.168.1.11", "Globe", on = false, isBulb = true),
         )
 
