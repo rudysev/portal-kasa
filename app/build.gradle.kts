@@ -11,8 +11,8 @@ android {
     applicationId = "com.portal.kasa"
     minSdk = 28          // Android 9 — Portal+ ("aloha")
     targetSdk = 29       // Android 10 — Portal-era behavior
-    versionCode = 4
-    versionName = "1.2.0"
+    versionCode = 5
+    versionName = "1.2.1"
   }
 
   buildTypes {
