@@ -1,6 +1,7 @@
 [versions]
-agp = "9.2.1"
-kotlin = "2.2.10"
+agp = "9.4.1"
+# AGP's built-in Kotlin brings KGP 2.2.10 at runtime; the root build puts this newer KGP on the classpath instead.
+kotlin = "2.4.21"
 coreKtx = "1.18.0"
 lifecycle = "2.8.7"
 activityCompose = "1.13.0"
@@ -28,4 +29,5 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
